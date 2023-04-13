@@ -1,0 +1,181 @@
+---
+title: "AlcoholConsumption"
+author: "Team 6_Pentagon"
+date: "2023-04-04"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## Data Background
+The data were obtained in a survey of students math and portuguese language courses in secondary school. It also contains social, gender and study information about students.
+## Business Question
+How can Universities define counselor hiring needs by predicting students alcohol consumption based on their grade performance and other social factors?
+
+Find people who might be alcoholics? (False positives)/Risk of alcoholism
+
+## Data Cleaning
+
+```{r, cache=TRUE}
+student <- read.csv("student-mat.csv", stringsAsFactors = TRUE)
+student$totalc <- student$Dalc+student$Walc
+student$totalc <- ifelse(student$totalc>2,1,0)
+student$Dalc <- NULL
+student$Walc <- NULL
+str(student)
+summary(student)
+studentd <- as.data.frame(model.matrix(~.-1, student))
+
+```
+
+
+## Normalize data
+```{r, cache=TRUE}
+normalize <- function(x){
+  return((x-min(x))/(max(x)-min(x)))
+  
+}
+student_norm <- as.data.frame(lapply(studentd, normalize))
+
+str(student_norm)
+summary(student_norm)
+```
+
+# Split data
+```{r, cache=TRUE}
+set.seed(12345)
+test_rows <- sample(1:nrow(student_norm), 0.5*nrow(student_norm))
+studentdt_test <- studentd[test_rows,]
+studentdt_train <- studentd[-test_rows,]
+student_test <- student_norm[test_rows, ]
+student_train <- student_norm[-test_rows, ]
+```
+
+## Regression Model
+
+```{r}
+firstmodel <- glm(totalc ~., data= student_train, family = "binomial")
+summary(firstmodel)
+```
+
+# Predict and Evaluate
+
+```{r}
+library(caret)
+studentpred <- predict(firstmodel, student_test, type = "response")
+modelsuccess <- ifelse(studentpred>=0.4, 1,0)
+confusionMatrix(as.factor(modelsuccess), as.factor(student_test$totalc), positive = "1")
+
+```
+
+## KNN Model data cleaning
+
+```{r}
+studentk_test <- student_norm[test_rows,-match("totalc",names(student_norm))]
+studentk_train <- student_norm[-test_rows,-match("totalc",names(student_norm))]
+studentk_test_labels <- student_norm[test_rows,"totalc"]
+studentk_train_labels <- student_norm[-test_rows,"totalc"]
+```
+## Build and Evaluate KNN Model
+```{r,cache=TRUE}
+library(class)
+knn_model <- knn(studentk_train,studentk_test,studentk_train_labels,k=15,prob= TRUE)
+
+library(caret)
+confusionMatrix(as.factor(knn_model), as.factor(studentk_test_labels),positive = "1")
+
+```
+# Build ANN Model
+
+```{r}
+
+library(neuralnet)
+ann_1 <- neuralnet(totalc ~.,data=student_train,hidden=7,2, lifesign ="full")
+plot(ann_1)
+saveRDS(ann_1,file = 'ann1model.rds')
+#Predict Model ANN
+ann_1predict <- predict(ann_1,student_test)
+ann_1bin <- ifelse(ann_1predict >= 0.25,1,0)
+#Evaluate Model ANN
+library(caret)
+confusionMatrix(as.factor(ann_1bin), as.factor(student_test$totalc), positive = "1")
+
+```
+# Decision tree
+```{r,cache = TRUE}
+#Build Model DT
+library(C50)
+studenttree <- C5.0(as.factor(totalc) ~., data = studentdt_train)
+plot(studenttree)
+
+summary(studenttree)
+
+#Evaluate and predict model
+studenttreepred <- predict(studenttree, studentdt_test)
+library(caret)
+confusionMatrix(as.factor(studenttreepred), as.factor(studentdt_test$totalc), positive = "1")
+```
+
+## Random forest
+```{r,cache=TRUE}
+#Predict RF Model
+library(randomForest)
+student_rf <- randomForest(as.factor(totalc) ~.,data=student_train)
+summary(student_rf)
+randomForest::varImpPlot(student_rf)
+
+
+#Evaluate and Predict RF Model
+
+studentrfpredict <- predict(student_rf, student_test)
+summary(studentrfpredict)
+confusionMatrix(as.factor(studentrfpredict), as.factor(student_test$totalc), positive = "1")
+```
+## Stacked Model
+## Combine five predicition vectors
+
+```{r,cache=TRUE}
+
+stacked_tele <- data.frame(log_pred = studentpred, KNN = knn_model, ANN = ann_1predict, DT_pred = studenttreepred, rf_pred = studentrfpredict,y = student_test$totalc)
+
+summary(stacked_tele)
+```
+
+## Test and Train
+
+```{r}
+set.seed(1234)
+test_set1 <- sample(1:nrow(stacked_tele), 0.3*nrow(stacked_tele)) 
+students_train <- stacked_tele[-test_set1, ]
+students_test <- stacked_tele[test_set1, ]
+
+```
+## Build Model Stacked Decision tree
+```{r}
+library(C50)
+stackedtree <- C5.0(as.factor(y) ~., data = students_train)
+plot(stackedtree)
+```
+
+## Predict and Evaluate model
+```{r,cache=TRUE}
+library(caret)
+stackedpredict <- predict(stackedtree,students_test)
+confusionMatrix(as.factor(stackedpredict), as.factor(students_test$y), positive = "1")
+
+```
+
+## Cost Consideration
+```{r,cache = TRUE}
+error_cost = matrix(c(0,1,4,0), nrow =2) 
+error_cost
+
+errormodel <- C5.0(as.factor(totalc)~., data = student_train,costs = error_cost)
+prederror <- predict(errormodel, student_test)
+summary(prederror)
+confusionMatrix(as.factor(prederror), as.factor(student_test$totalc), positive = "1")
+
+```
+
